@@ -1,0 +1,130 @@
+// Combined sketch for Heart Rate, SpO2, and Temperature using the MAX30105 sensor
+// This code merges the functionality of three separate examples into one.
+
+#include <Wire.h>
+#include "MAX30105.h"
+#include "spo2_algorithm.h"
+
+MAX30105 particleSensor;
+
+// --- Buffers for the SpO2/HR Algorithm ---
+// The algorithm requires a buffer of 100 samples to work correctly.
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
+  // For smaller microcontrollers like Arduino Uno, use 16-bit buffers
+  uint16_t irBuffer[100]; 
+  uint16_t redBuffer[100];
+#else
+  // For larger microcontrollers like ESP32, use 32-bit buffers
+  uint32_t irBuffer[100];
+  uint32_t redBuffer[100];
+#endif
+
+// --- Data Variables ---
+int32_t bufferLength = 100; // Length of the data buffer
+int32_t spo2;               // Calculated SpO2 value
+int8_t validSPO2;           // Flag to indicate if SpO2 calculation is valid
+int32_t heartRate;          // Calculated heart rate value
+int8_t validHeartRate;      // Flag to indicate if heart rate calculation is valid
+
+// --- Variables for Averaging Heart Rate ---
+const byte RATE_SIZE = 4; // Number of samples to average. 4 is a good start.
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+int beatAvg = 0;
+
+// --- Variables for Timed Printing ---
+unsigned long lastPrintTime = 0;
+const unsigned long printInterval = 5000; // Print data every 5 seconds (5000 ms)
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Initializing sensor...");
+
+  // --- Initialize the MAX30105 Sensor ---
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    Serial.println(F("MAX30105 was not found. Please check wiring and power."));
+    while (1);
+  }
+
+  // --- Configure Sensor for Heart Rate and SpO2 ---
+  // These settings are optimal for PPG (photoplethysmography) readings.
+  byte ledBrightness = 60;   // 0=Off, 255=50mA
+  byte sampleAverage = 4;    // 1, 2, 4, 8, 16, 32
+  byte ledMode = 2;          // 1=Red, 2=Red+IR, 3=Red+IR+Green
+  byte sampleRate = 100;     // 50, 100, 200, 400, 800, 1000, 1600, 3200
+  int pulseWidth = 411;      // 69, 118, 215, 411
+  int adcRange = 4096;       // 2048, 4096, 8192, 16384
+  particleSensor.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
+
+  // --- Enable Temperature Reading ---
+  // This is required to be called for the readTemperature() function to work.
+  particleSensor.enableDIETEMPRDY(); 
+
+  Serial.println("Sensor configured. Place finger on sensor.");
+}
+
+void loop() {
+  // 1. PRIME THE BUFFERS
+  // Fill the buffer with the first 100 samples before calculating.
+  // This part runs only once. All printing is removed to keep the output clean.
+  for (byte i = 0; i < bufferLength; i++) {
+    while (particleSensor.available() == false) particleSensor.check();
+    redBuffer[i] = particleSensor.getRed();
+    irBuffer[i] = particleSensor.getIR();
+    particleSensor.nextSample();
+  }
+  // Calculate the first values
+  maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+
+  // 2. CONTINUOUSLY UPDATE AND CALCULATE
+  // This loop runs forever, constantly updating the data buffer and calculating new values.
+  while (1) {
+    // a. Shift buffer to make space for new samples
+    for (byte i = 25; i < 100; i++) {
+      redBuffer[i - 25] = redBuffer[i];
+      irBuffer[i - 25] = irBuffer[i];
+    }
+
+    // b. Add 25 new samples to the buffer
+    for (byte i = 75; i < 100; i++) {
+      while (particleSensor.available() == false) particleSensor.check();
+      redBuffer[i] = particleSensor.getRed();
+      irBuffer[i] = particleSensor.getIR();
+      particleSensor.nextSample();
+    }
+    
+    // c. Recalculate HR and SpO2 with the new data
+    maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+
+    // d. Update the running average for Heart Rate
+    if (validHeartRate) {
+      rates[rateSpot++] = (byte)heartRate;
+      rateSpot %= RATE_SIZE; // Wrap around the array
+      // Calculate the average
+      beatAvg = 0;
+      for (byte x = 0; x < RATE_SIZE; x++) beatAvg += rates[x];
+      beatAvg /= RATE_SIZE;
+    }
+    
+    // 3. PERIODICALLY PRINT ALL RESULTS
+    // This block only runs every 'printInterval' milliseconds.
+    if (millis() - lastPrintTime > printInterval) {
+      // Read the temperature right before printing.
+      float temperatureC = particleSensor.readTemperature();
+      
+      Serial.print("BPM=");
+      if (validHeartRate) Serial.print(heartRate); else Serial.print("---");
+
+      Serial.print(" | Avg BPM=");
+      if (validHeartRate) Serial.print(beatAvg); else Serial.print("---");
+
+      Serial.print(" | SpO2=");
+      if (validSPO2) Serial.print(spo2); else Serial.print("---");
+      
+      Serial.print("% | Temp(C)=");
+      Serial.println(temperatureC, 2); // Print temperature with 2 decimal places
+
+      lastPrintTime = millis(); // Reset the timer
+    }
+  }
+}
