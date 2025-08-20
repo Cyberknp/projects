@@ -1,0 +1,74 @@
+#include <Wire.h>
+#include <MPU6050_light.h>
+
+// Step counter variables
+volatile unsigned long stepCount = 0;
+unsigned long lastStepTime = 0;
+const float ACCEL_THRESHOLD = 0.3;
+const unsigned long STEP_DELAY = 300; // Minimum time between steps in milliseconds
+bool stepDetected = false;
+
+// MPU6050 sensor object
+MPU6050 mpu(Wire);
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize I2C communication
+  Wire.begin();
+  
+  // Initialize MPU6050
+  byte status = mpu.begin();
+  Serial.print(F("MPU6050 status: "));
+  Serial.println(status);
+  
+  while(status != 0) { 
+    // If connection failed, keep trying
+    Serial.println(F("MPU6050 connection failed. Retrying..."));
+    delay(1000);
+    status = mpu.begin();
+  }
+  
+  Serial.println(F("Calculating offsets, do not move MPU6050"));
+  delay(1000);
+  mpu.calcOffsets(); // Calculate gyro and accelerometer offsets
+  Serial.println("MPU6050 ready!");
+  Serial.println("Starting step counting...");
+  Serial.println("Walk around to test the step counter!");
+}
+
+void loop() {
+  // Update sensor readings
+  mpu.update();
+  
+  // Get acceleration data (in g-force units)
+  float accelX = mpu.getAccX();
+  float accelY = mpu.getAccY();
+  float accelZ = mpu.getAccZ();
+  
+  // Calculate magnitude of acceleration vector
+  float accelMagnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+  
+  unsigned long currentTime = millis();
+  
+  // Step detection algorithm
+  // Detects when acceleration magnitude exceeds threshold (indicating movement/impact)
+  if (accelMagnitude > (1.0 + ACCEL_THRESHOLD)) {
+    // Check if enough time has passed since last step to avoid double counting
+    if (!stepDetected && (currentTime - lastStepTime > STEP_DELAY)) {
+      stepCount++;
+      stepDetected = true;
+      lastStepTime = currentTime;
+      
+      // Output step count to serial monitor
+      Serial.print("Step detected! Total steps: ");
+      Serial.println(stepCount);
+    }
+  } else {
+    // Reset step detection flag when acceleration returns to normal
+    stepDetected = false;
+  }
+  
+  // Small delay to prevent overwhelming the processor
+  delay(10);
+}
