@@ -1,0 +1,281 @@
+// Combined ESP32 Health Monitor
+// MPU6050 Step Counter + MAX30102 Heart Rate/SpO2/Temperature Sensor
+// Single line output format
+
+#include <Wire.h>
+#include <MPU6050_light.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+
+// --- I2C Bus Definitions ---
+TwoWire I2C_MAX = TwoWire(0);  // I2C bus for MAX30102 (SCL: GPIO22, SDA: GPIO21)
+TwoWire I2C_MPU = TwoWire(1);  // I2C bus for MPU6050 (SCL: GPIO26, SDA: GPIO27)
+
+// --- Sensor Objects ---
+MAX30105 particleSensor;  // Works with MAX30102
+MPU6050 mpu(I2C_MPU);
+
+// --- Step Counter Variables ---
+volatile unsigned long stepCount = 0;
+unsigned long lastStepTime = 0;
+const float ACCEL_THRESHOLD = 0.3;
+const unsigned long STEP_DELAY = 300;
+bool stepDetected = false;
+
+// --- MAX30102 Heart Rate Variables ---
+const byte RATE_SIZE = 4;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+int beatsPerMinute = 0;
+int beatAvg = 0;
+
+// Heart rate detection variables
+long irValuePrevious = 0;
+long irValueCurrent = 0;
+bool fingerDetected = false;
+long beatThreshold = 0;
+long peakValue = 0;
+long valleyValue = 100000;
+unsigned long lastBeatTime = 0;
+bool lookingForPeak = true;
+
+// --- SpO2 and Temperature Variables ---
+int spo2 = 0;
+float bodyTemperature = 0.0;
+double avered = 0; 
+double aveir = 0;
+double sumirrms = 0;
+double sumredrms = 0;
+int sampleCount = 0;
+double frate = 0.95;
+
+// --- System State ---
+bool maxSensorReady = false;
+unsigned long lastPrintTime = 0;
+const unsigned long printInterval = 1000; // Update every 1 second
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("ESP32 Health Monitor - MAX30102 + MPU6050");
+  Serial.println("Initializing sensors...");
+  
+  // --- Initialize I2C Buses ---
+  I2C_MAX.begin(21, 22, 100000);  // SDA: GPIO21, SCL: GPIO22 for MAX30102
+  I2C_MPU.begin(27, 26, 100000);  // SDA: GPIO27, SCL: GPIO26 for MPU6050
+  
+  // --- Initialize MPU6050 ---
+  byte mpuStatus = mpu.begin();
+  while(mpuStatus != 0) { 
+    Serial.println("MPU6050 connection failed. Retrying...");
+    delay(500);
+    mpuStatus = mpu.begin();
+  }
+  mpu.calcOffsets();
+  Serial.println("MPU6050 ready!");
+  
+  // --- Initialize MAX30102 ---
+  if (!particleSensor.begin(I2C_MAX)) {
+    Serial.println("MAX30102 not found. Check connections.");
+    maxSensorReady = false;
+  } else {
+    // Configure MAX30102 for heart rate, SpO2, and temperature
+    particleSensor.setup(60, 4, 2, 100, 411, 4096); // Configure sensor
+    particleSensor.enableDIETEMPRDY(); // Enable temperature readings
+    maxSensorReady = true;
+    Serial.println("MAX30102 ready!");
+  }
+  
+  Serial.println("Place finger on MAX30102 sensor and start walking!");
+  Serial.println("Format: Steps: X | BPM: X | Avg BPM: X | SpO2: X% | Temp: X°C");
+  Serial.println();
+}
+
+void loop() {
+  // --- Update Step Count ---
+  updateStepCount();
+  
+  // --- Update Health Data ---
+  if (maxSensorReady) {
+    updateHealthData();
+  }
+  
+  // --- Print Single Line Output ---
+  printSingleLineData();
+  
+  delay(20);
+}
+
+void updateStepCount() {
+  mpu.update();
+  
+  float accelX = mpu.getAccX();
+  float accelY = mpu.getAccY();
+  float accelZ = mpu.getAccZ();
+  float accelMagnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+  
+  unsigned long currentTime = millis();
+  
+  if (accelMagnitude > (1.0 + ACCEL_THRESHOLD)) {
+    if (!stepDetected && (currentTime - lastStepTime > STEP_DELAY)) {
+      stepCount++;
+      stepDetected = true;
+      lastStepTime = currentTime;
+    }
+  } else {
+    stepDetected = false;
+  }
+}
+
+void updateHealthData() {
+  long irValue = particleSensor.getIR();
+  long redValue = particleSensor.getRed();
+  
+  // --- Improved Heart Rate Detection for MAX30102 ---
+  if (irValue > 50000) { // Good finger contact
+    fingerDetected = true;
+    
+    // Update peak and valley values for threshold calculation
+    if (irValue > peakValue) peakValue = irValue;
+    if (irValue < valleyValue) valleyValue = irValue;
+    
+    // Calculate dynamic threshold (between peak and valley)
+    beatThreshold = (peakValue + valleyValue) / 2;
+    
+    // Beat detection using threshold crossing
+    if (lookingForPeak) {
+      if (irValue > beatThreshold + 1000) { // Rising edge with hysteresis
+        // Peak detected - potential heartbeat
+        unsigned long currentTime = millis();
+        if (currentTime - lastBeatTime > 300) { // Minimum 300ms between beats (200 BPM max)
+          // Calculate BPM
+          if (lastBeatTime > 0) {
+            long timeBetweenBeats = currentTime - lastBeatTime;
+            beatsPerMinute = 60000 / timeBetweenBeats; // Convert to BPM
+            
+            if (beatsPerMinute > 20 && beatsPerMinute < 200) { // Valid heart rate range
+              // Store in rates array
+              rates[rateSpot++] = (byte)beatsPerMinute;
+              rateSpot %= RATE_SIZE;
+              
+              // Calculate average
+              long total = 0;
+              for (byte i = 0; i < RATE_SIZE; i++) {
+                total += rates[i];
+              }
+              beatAvg = total / RATE_SIZE;
+            }
+          }
+          lastBeatTime = currentTime;
+        }
+        lookingForPeak = false; // Now look for valley
+      }
+    } else {
+      if (irValue < beatThreshold - 1000) { // Falling edge with hysteresis
+        lookingForPeak = true; // Now look for next peak
+      }
+    }
+    
+    // Reset peak/valley detection periodically
+    static unsigned long lastReset = 0;
+    if (millis() - lastReset > 5000) { // Reset every 5 seconds
+      peakValue = irValue;
+      valleyValue = irValue;
+      lastReset = millis();
+    }
+    
+  } else {
+    fingerDetected = false;
+    // Reset detection when finger is removed
+    peakValue = 0;
+    valleyValue = 100000;
+    beatThreshold = 0;
+  }
+  
+  // --- SpO2 Calculation ---
+  if (fingerDetected) {
+    avered = avered * frate + redValue * (1.0 - frate);
+    aveir = aveir * frate + irValue * (1.0 - frate);
+    
+    sumredrms += (redValue - avered) * (redValue - avered);
+    sumirrms += (irValue - aveir) * (irValue - aveir);
+    
+    if ((sampleCount % 100) == 0 && sampleCount > 0) {
+      double redRMS = sqrt(sumredrms / 100);
+      double irRMS = sqrt(sumirrms / 100);
+      
+      if (irRMS > 0 && aveir > 0) {
+        double R = (redRMS / avered) / (irRMS / aveir);
+        spo2 = (int)(104 - 17 * R);
+        
+        // Apply reasonable bounds
+        if (spo2 > 100) spo2 = 100;
+        if (spo2 < 70) spo2 = 70;
+      }
+      
+      sumredrms = 0;
+      sumirrms = 0;
+    }
+    sampleCount++;
+  }
+  
+  // --- Body Temperature Reading ---
+  bodyTemperature = particleSensor.readTemperature();
+}
+
+void printSingleLineData() {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastPrintTime > printInterval) {
+    // Print everything on one line
+    Serial.print("Steps: ");
+    Serial.print(stepCount);
+    
+    Serial.print(" | BPM: ");
+    if (maxSensorReady && beatsPerMinute > 0 && fingerDetected) {
+      Serial.print(beatsPerMinute);
+    } else {
+      Serial.print("---");
+    }
+    
+    Serial.print(" | Avg BPM: ");
+    if (maxSensorReady && beatAvg > 0 && fingerDetected) {
+      Serial.print(beatAvg);
+    } else {
+      Serial.print("---");
+    }
+    
+    Serial.print(" | SpO2: ");
+    if (maxSensorReady && spo2 > 0 && fingerDetected) {
+      Serial.print(spo2);
+    } else {
+      Serial.print("---");
+    }
+    Serial.print("%");
+    
+    Serial.print(" | Temp: ");
+    if (maxSensorReady) {
+      Serial.print(bodyTemperature, 1);
+    } else {
+      Serial.print("---");
+    }
+    Serial.print("°C");
+    
+    // Add debugging info for heart rate
+    if (maxSensorReady) {
+      Serial.print(" | IR: ");
+      Serial.print(particleSensor.getIR());
+      if (fingerDetected) {
+        Serial.print(" [GOOD]");
+      } else {
+        Serial.print(" [PLACE FINGER]");
+      }
+    } else {
+      Serial.print(" [SENSOR OFF]");
+    }
+    
+    Serial.println(); // New line after complete data
+    
+    lastPrintTime = currentTime;
+  }
+}
