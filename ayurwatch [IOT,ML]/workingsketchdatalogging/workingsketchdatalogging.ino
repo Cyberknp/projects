@@ -1,0 +1,429 @@
+// Combined ESP32 Health Monitor with Google Sheets Integration
+// MPU6050 Step Counter + MAX30102 Heart Rate/SpO2/Temperature Sensor
+// Logs data to Google Sheets using ESP_Google_Sheet_Client library
+
+#include <Wire.h>
+#include <WiFi.h>
+#include <MPU6050_light.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+#include "time.h"
+#include <ESP_Google_Sheet_Client.h>
+
+// For SD/SD_MMC mounting helper
+#include <GS_SDHelper.h>
+
+// WiFi Configuration
+#define WIFI_SSID "nagendra"
+#define WIFI_PASSWORD "nagendraaa"
+
+// Google Project Configuration
+#define PROJECT_ID "iot-datalogging-470017"
+#define CLIENT_EMAIL "iot-datalogging@iot-datalogging-470017.iam.gserviceaccount.com"
+
+// Service Account's private key
+const char PRIVATE_KEY[] PROGMEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDTmPJg57gtxzLx\ni2BTfH8ZBbjGfnspJQLef0zMcuXd4zhyPuPHTKNlZH/IU09nfl5+ZfwrclTUd7gh\nqtV5v/IAjGw0EYGbFrBdHVO0y4oBqhH3QrFFirPBNDOK9epJMVegTUNFW8NT79yA\nCnr00EwBE4C+oVhAMKMXCyGAw7p28a5PjtEZ8v1gaYssYwtU0OYJyr6eYoHAiNd+\nplolmXgvfukxp+3kvVj3wvsKN8poQYBXtv1ZNRAEkrhxhJOynmQbX504HUe0hHUT\nmOZ0cLizFNeHnntDNEljwbqySl+fWakT24/WQfcn31yg0Kp8N6ESOz+/MR8Fz0I1\nFfqRq6a3AgMBAAECggEASqJL+7o/0IXOhjwvAcOL4PuPrRO3xU90r54fLI3qXlVi\n94kPNqDlkUHdgH9CJrMACX1XcMum+DoyDE4Bdiwp49+j2snB+T4Lfwx1FfQk/WlL\nZPd1J55AwQj0lTMgLCjnS3d1HuW7A8Q69j68F9XQuSBz7MlkI2AEZoBalNx0zLbW\nCqT+l/oS83GScQCH7Lev60RXpHBgnfrGQ/rnOutjyQIF/6PAyrOzYBVYtQnwdKaX\nh1iKoWGJ28C3DdwbVKHFIFVUSwfaaxpcuJBN4oMmVru1svSRO4vxzVCwLTR35F5t\nww79Az/JykfK7Hv6oABmTk7PS/ip/MBNhl2JzeyZwQKBgQDweT3fU52rjOQ9/vnm\ndFji4VHTUHu6pC02Gg/gLPwtxGuxDNyE0FphjQYOc1dBGk5w1Y6VSUCqC2FBjfda\nOh07z2HuY7d7zq7GeC+G+GyF3ToShF4NZN8DEscU72LWI5vaJr81G/t586LPFZRq\nPvwz8Z/u435dJHwnLaRfo8+f2QKBgQDhQmouRoZ1VjHpQZPtDBAJgRxCV4OVBw6j\nImSmSyhQLDIbMtFXd0yd+yR8IkEtwWbEDANwlzIR7NmLouKpq5F76KWcZch6Inhv\noHNEySDZpFnEoPkP/8PqvNy6yDaNmAW5pYQwWomtmWV4ocucM+Vflh4nw0pTEwvZ\nQsUEXXbxDwKBgQCXUjP1DJDzGr2lpYVr11r3qgHrj4HMePNaUBwdXTFzO17pEsbR\nbKrzJ+LfxQTrGrqxljEbD/V5C6AvuD4msNskf+OIN4eGiRDCI28E596ifgvFCzaE\nBy2uqWpNajYvukighjFcIjelDgMtfM7f7LKXnTye/tjNk9/sZ3RAGrzUQQKBgCLj\n7ZxjUhpEkpCFlssFrko6lEz2Tyw7HppIDnzvcTwRzGUIFwLMOLLTnpAXoi7bIPbG\nwZWj5Z5/KCcHwMH1ECC4JUa3QTkhs7Pej1wdJxhu63SYVluTCx6FyE6qCkEeRey+\nZV4z99VKyDvKG8aDB0kp8FvKVO3PKmupeui1LWIjAoGAYF05e6YNkq1ycELo+8Ja\nzhlQPN/+Rg24vUO6x8Ad3AbMyMezQMlfmq8m8VAbkRo0+B7P2tTjfz0nalXx2CKv\n5vJvmacpa4t4FnaSJBQOJMcE+pwsG9vFAXuZSJXXos+vlXli7airnQTayAh8+0PW\nZbjSJ279MZkOgI+vOj8VJvk=\n-----END PRIVATE KEY-----\n";
+
+// The ID of the spreadsheet where you'll publish the data
+const char spreadsheetId[] = "1rz_Mj739pGbK65mFIJnSD6b4XoRkotpUTGRbVjRtzFg";
+
+// Timer variables
+unsigned long lastTime = 0;  
+unsigned long timerDelay = 30000; // 30 seconds
+
+// NTP server to request epoch time
+const char* ntpServer = "pool.ntp.org";
+
+// Variable to save current epoch time
+unsigned long epochTime; 
+
+// --- I2C Bus Definitions ---
+TwoWire I2C_MAX = TwoWire(0);  // I2C bus for MAX30102 (SCL: GPIO22, SDA: GPIO21)
+TwoWire I2C_MPU = TwoWire(1);  // I2C bus for MPU6050 (SCL: GPIO26, SDA: GPIO27)
+
+// --- Sensor Objects ---
+MAX30105 particleSensor;  // Works with MAX30102
+MPU6050 mpu(I2C_MPU);
+
+// --- Step Counter Variables ---
+volatile unsigned long stepCount = 0;
+unsigned long lastStepTime = 0;
+const float ACCEL_THRESHOLD = 0.3;
+const unsigned long STEP_DELAY = 300;
+bool stepDetected = false;
+
+// --- MAX30102 Heart Rate Variables ---
+const byte RATE_SIZE = 4;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+int beatsPerMinute = 0;
+int beatAvg = 0;
+
+// Heart rate detection variables
+long irValuePrevious = 0;
+long irValueCurrent = 0;
+bool fingerDetected = false;
+long beatThreshold = 0;
+long peakValue = 0;
+long valleyValue = 100000;
+unsigned long lastBeatTime = 0;
+bool lookingForPeak = true;
+
+// --- SpO2 and Temperature Variables ---
+int spo2 = 0;
+float bodyTemperature = 0.0;
+double avered = 0; 
+double aveir = 0;
+double sumirrms = 0;
+double sumredrms = 0;
+int sampleCount = 0;
+double frate = 0.95;
+
+// --- System State ---
+bool maxSensorReady = false;
+unsigned long lastPrintTime = 0;
+const unsigned long printInterval = 1000; // Update every 1 second
+
+// Token Callback function
+void tokenStatusCallback(TokenInfo info);
+
+// Function that gets current epoch time
+unsigned long getTime() {
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    //Serial.println("Failed to obtain time");
+    return(0);
+  }
+  time(&now);
+  return now;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("ESP32 Health Monitor - MAX30102 + MPU6050 + Google Sheets");
+  Serial.println("Initializing sensors...");
+  
+  //Configure time
+  configTime(0, 0, ntpServer);
+  
+  // --- Initialize I2C Buses ---
+  I2C_MAX.begin(21, 22, 100000);  // SDA: GPIO21, SCL: GPIO22 for MAX30102
+  I2C_MPU.begin(27, 26, 100000);  // SDA: GPIO27, SCL: GPIO26 for MPU6050
+  
+  // --- Initialize MPU6050 ---
+  byte mpuStatus = mpu.begin();
+  while(mpuStatus != 0) { 
+    Serial.println("MPU6050 connection failed. Retrying...");
+    delay(500);
+    mpuStatus = mpu.begin();
+  }
+  mpu.calcOffsets();
+  Serial.println("MPU6050 ready!");
+  
+  // --- Initialize MAX30102 ---
+  if (!particleSensor.begin(I2C_MAX)) {
+    Serial.println("MAX30102 not found. Check connections.");
+    maxSensorReady = false;
+  } else {
+    // Configure MAX30102 for heart rate, SpO2, and temperature
+    particleSensor.setup(60, 4, 2, 100, 411, 4096); // Configure sensor
+    particleSensor.enableDIETEMPRDY(); // Enable temperature readings
+    maxSensorReady = true;
+    Serial.println("MAX30102 ready!");
+  }
+  
+  // --- Initialize Google Sheets ---
+  GSheet.printf("ESP Google Sheet Client v%s\n\n", ESP_GOOGLE_SHEET_CLIENT_VERSION);
+
+  // Connect to Wi-Fi
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(1000);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  // Set the callback for Google API access token generation status (for debug only)
+  GSheet.setTokenCallback(tokenStatusCallback);
+
+  // Set the seconds to refresh the auth token before expire (60 to 3540, default is 300 seconds)
+  GSheet.setPrerefreshSeconds(10 * 60);
+
+  // Begin the access token generation for Google API authentication
+  GSheet.begin(CLIENT_EMAIL, PROJECT_ID, PRIVATE_KEY);
+  
+  Serial.println("Place finger on MAX30102 sensor and start walking!");
+  Serial.println("Format: Steps: X | BPM: X | Avg BPM: X | SpO2: X% | Temp: X°C");
+  Serial.println("Data will be logged to Google Sheets every 30 seconds");
+  Serial.println();
+}
+
+void loop() {
+  // Call ready() repeatedly in loop for authentication checking and processing
+  bool ready = GSheet.ready();
+  
+  // --- Update Step Count ---
+  updateStepCount();
+  
+  // --- Update Health Data ---
+  if (maxSensorReady) {
+    updateHealthData();
+  }
+  
+  // --- Print Single Line Output ---
+  printSingleLineData();
+  
+  // --- Upload to Google Sheets ---
+  if (ready && millis() - lastTime > timerDelay) {
+    uploadToGoogleSheets();
+    lastTime = millis();
+  }
+  
+  delay(20);
+}
+
+void updateStepCount() {
+  mpu.update();
+  
+  float accelX = mpu.getAccX();
+  float accelY = mpu.getAccY();
+  float accelZ = mpu.getAccZ();
+  float accelMagnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+  
+  unsigned long currentTime = millis();
+  
+  if (accelMagnitude > (1.0 + ACCEL_THRESHOLD)) {
+    if (!stepDetected && (currentTime - lastStepTime > STEP_DELAY)) {
+      stepCount++;
+      stepDetected = true;
+      lastStepTime = currentTime;
+    }
+  } else {
+    stepDetected = false;
+  }
+}
+
+void updateHealthData() {
+  long irValue = particleSensor.getIR();
+  long redValue = particleSensor.getRed();
+  
+  // --- Improved Heart Rate Detection for MAX30102 ---
+  if (irValue > 50000) { // Good finger contact
+    fingerDetected = true;
+    
+    // Update peak and valley values for threshold calculation
+    if (irValue > peakValue) peakValue = irValue;
+    if (irValue < valleyValue) valleyValue = irValue;
+    
+    // Calculate dynamic threshold (between peak and valley)
+    beatThreshold = (peakValue + valleyValue) / 2;
+    
+    // Beat detection using threshold crossing
+    if (lookingForPeak) {
+      if (irValue > beatThreshold + 1000) { // Rising edge with hysteresis
+        // Peak detected - potential heartbeat
+        unsigned long currentTime = millis();
+        if (currentTime - lastBeatTime > 300) { // Minimum 300ms between beats (200 BPM max)
+          // Calculate BPM
+          if (lastBeatTime > 0) {
+            long timeBetweenBeats = currentTime - lastBeatTime;
+            beatsPerMinute = 60000 / timeBetweenBeats; // Convert to BPM
+            
+            if (beatsPerMinute > 20 && beatsPerMinute < 200) { // Valid heart rate range
+              // Store in rates array
+              rates[rateSpot++] = (byte)beatsPerMinute;
+              rateSpot %= RATE_SIZE;
+              
+              // Calculate average
+              long total = 0;
+              for (byte i = 0; i < RATE_SIZE; i++) {
+                total += rates[i];
+              }
+              beatAvg = total / RATE_SIZE;
+            }
+          }
+          lastBeatTime = currentTime;
+        }
+        lookingForPeak = false; // Now look for valley
+      }
+    } else {
+      if (irValue < beatThreshold - 1000) { // Falling edge with hysteresis
+        lookingForPeak = true; // Now look for next peak
+      }
+    }
+    
+    // Reset peak/valley detection periodically
+    static unsigned long lastReset = 0;
+    if (millis() - lastReset > 5000) { // Reset every 5 seconds
+      peakValue = irValue;
+      valleyValue = irValue;
+      lastReset = millis();
+    }
+    
+  } else {
+    fingerDetected = false;
+    // Reset detection when finger is removed
+    peakValue = 0;
+    valleyValue = 100000;
+    beatThreshold = 0;
+  }
+  
+  // --- SpO2 Calculation ---
+  if (fingerDetected) {
+    avered = avered * frate + redValue * (1.0 - frate);
+    aveir = aveir * frate + irValue * (1.0 - frate);
+    
+    sumredrms += (redValue - avered) * (redValue - avered);
+    sumirrms += (irValue - aveir) * (irValue - aveir);
+    
+    if ((sampleCount % 100) == 0 && sampleCount > 0) {
+      double redRMS = sqrt(sumredrms / 100);
+      double irRMS = sqrt(sumirrms / 100);
+      
+      if (irRMS > 0 && aveir > 0) {
+        double R = (redRMS / avered) / (irRMS / aveir);
+        spo2 = (int)(104 - 17 * R);
+        
+        // Apply reasonable bounds
+        if (spo2 > 100) spo2 = 100;
+        if (spo2 < 70) spo2 = 70;
+      }
+      
+      sumredrms = 0;
+      sumirrms = 0;
+    }
+    sampleCount++;
+  }
+  
+  // --- Body Temperature Reading ---
+  bodyTemperature = particleSensor.readTemperature();
+}
+
+void printSingleLineData() {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastPrintTime > printInterval) {
+    // Print everything on one line
+    Serial.print("Steps: ");
+    Serial.print(stepCount);
+    
+    Serial.print(" | BPM: ");
+    if (maxSensorReady && beatsPerMinute > 0 && fingerDetected) {
+      Serial.print(beatsPerMinute);
+    } else {
+      Serial.print("---");
+    }
+    
+    Serial.print(" | Avg BPM: ");
+    if (maxSensorReady && beatAvg > 0 && fingerDetected) {
+      Serial.print(beatAvg);
+    } else {
+      Serial.print("---");
+    }
+    
+    Serial.print(" | SpO2: ");
+    if (maxSensorReady && spo2 > 0 && fingerDetected) {
+      Serial.print(spo2);
+    } else {
+      Serial.print("---");
+    }
+    Serial.print("%");
+    
+    Serial.print(" | Temp: ");
+    if (maxSensorReady) {
+      Serial.print(bodyTemperature, 1);
+    } else {
+      Serial.print("---");
+    }
+    Serial.print("°C");
+    
+    // Add debugging info for heart rate
+    if (maxSensorReady) {
+      Serial.print(" | IR: ");
+      Serial.print(particleSensor.getIR());
+      if (fingerDetected) {
+        Serial.print(" [GOOD]");
+      } else {
+        Serial.print(" [PLACE FINGER]");
+      }
+    } else {
+      Serial.print(" [SENSOR OFF]");
+    }
+    
+    // WiFi and Google Sheets status
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print(" | WiFi: OK");
+      if (GSheet.ready()) {
+        Serial.print(" | Sheets: READY");
+      } else {
+        Serial.print(" | Sheets: AUTHENTICATING");
+      }
+    } else {
+      Serial.print(" | WiFi: DISCONNECTED");
+    }
+    
+    Serial.println(); // New line after complete data
+    
+    lastPrintTime = currentTime;
+  }
+}
+
+void uploadToGoogleSheets() {
+  FirebaseJson response;
+
+  Serial.println("\nAppending health data to spreadsheet...");
+  Serial.println("---------------------------------------");
+
+  FirebaseJson valueRange;
+
+  // Get current timestamp
+  epochTime = getTime();
+
+  // Prepare data for Google Sheets
+  // Column structure: Timestamp | Steps | BPM | Avg BPM | SpO2 | Temperature | Finger Detected
+  valueRange.add("majorDimension", "COLUMNS");
+  valueRange.set("values/[0]/[0]", epochTime);
+  valueRange.set("values/[1]/[0]", stepCount);
+  valueRange.set("values/[2]/[0]", (fingerDetected && beatsPerMinute > 0) ? beatsPerMinute : 0);
+  valueRange.set("values/[3]/[0]", (fingerDetected && beatAvg > 0) ? beatAvg : 0);
+  valueRange.set("values/[4]/[0]", (fingerDetected && spo2 > 0) ? spo2 : 0);
+  valueRange.set("values/[5]/[0]", bodyTemperature);
+  valueRange.set("values/[6]/[0]", fingerDetected ? "YES" : "NO");
+
+  // For Google Sheet API ref doc, go to https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/append
+  // Append values to the spreadsheet
+  bool success = GSheet.values.append(&response /* returned response */, 
+                                     spreadsheetId /* spreadsheet Id to append */, 
+                                     "Sheet1!A1" /* range to append */, 
+                                     &valueRange /* data range to append */);
+  
+  if (success) {
+    Serial.println("✓ Health data uploaded successfully!");
+    response.toString(Serial, true);
+    valueRange.clear();
+  } else {
+    Serial.println("✗ Upload failed:");
+    Serial.println(GSheet.errorReason());
+  }
+  
+  Serial.println();
+  Serial.print("Free heap: ");
+  Serial.println(ESP.getFreeHeap());
+}
+
+void tokenStatusCallback(TokenInfo info) {
+  if (info.status == token_status_error) {
+    GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
+    GSheet.printf("Token error: %s\n", GSheet.getTokenError(info).c_str());
+  } else {
+    GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
+  }
+}
