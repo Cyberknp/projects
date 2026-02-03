@@ -1,0 +1,8 @@
+
+{
+  "name": "Matuguides",
+  "description": "A compassionate platform connecting individuals navigating life's challenges with 'Matuguides'—mature peers who have healed from similar pain and offer wisdom for the journey forward.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
