@@ -1,0 +1,239 @@
+.app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.header {
+    width: 100%;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: #ffffff;
+    padding: 28px 0;
+    text-align: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.header h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.tabs {
+    display: flex;
+    gap: 0;
+    margin-top: 32px;
+    border-radius: 10px 10px 0 0;
+    overflow: hidden;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.tab-btn {
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    background-color: #dfe6ed;
+    color: #4a4a6a;
+    transition:
+        background-color 0.25s ease,
+        color 0.25s ease;
+}
+
+.tab-btn:hover {
+    background-color: #c9d4df;
+}
+
+.tab-btn.active {
+    background-color: #ffffff;
+    color: #0f3460;
+    box-shadow: inset 0 3px 0 #0f3460;
+}
+
+.content {
+    width: 100%;
+    max-width: 520px;
+    padding: 0 16px 48px;
+}
+
+.card {
+    background: #ffffff;
+    border-radius: 0 0 12px 12px;
+    padding: 32px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.card h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #f0f2f5;
+}
+
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #4a4a6a;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.form-group input {
+    padding: 11px 14px;
+    font-size: 0.95rem;
+    border: 1.5px solid #dfe6ed;
+    border-radius: 8px;
+    background-color: #f8f9fb;
+    color: #1a1a2e;
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+    outline: none;
+    font-family: inherit;
+}
+
+.form-group input::placeholder {
+    color: #a0aec0;
+}
+
+.form-group input:focus {
+    border-color: #0f3460;
+    box-shadow: 0 0 0 3px rgba(15, 52, 96, 0.1);
+    background-color: #ffffff;
+}
+
+.submit-btn {
+    margin-top: 8px;
+    padding: 13px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #ffffff;
+    background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition:
+        opacity 0.2s ease,
+        transform 0.15s ease;
+    letter-spacing: 0.3px;
+}
+
+.submit-btn:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.submit-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.submit-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.message {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1.5;
+}
+
+.message.success {
+    background-color: #eafaf1;
+    color: #1a7a4c;
+    border: 1px solid #b7edd0;
+}
+
+.message.error {
+    background-color: #fdf0f0;
+    color: #b33a3a;
+    border: 1px solid #f0c0c0;
+}
+
+.student-details {
+    margin-top: 24px;
+}
+
+.student-details h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 14px;
+}
+
+.details-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #e8ecf1;
+}
+
+.details-table tr {
+    border-bottom: 1px solid #e8ecf1;
+}
+
+.details-table tr:last-child {
+    border-bottom: none;
+}
+
+.details-table tr:nth-child(even) {
+    background-color: #f8f9fb;
+}
+
+.details-table td {
+    padding: 12px 16px;
+    font-size: 0.9rem;
+}
+
+.details-table td.label {
+    font-weight: 600;
+    color: #4a4a6a;
+    white-space: nowrap;
+    width: 40%;
+    background-color: rgba(15, 52, 96, 0.03);
+}
+
+@media (max-width: 560px) {
+    .header h1 {
+        font-size: 1.35rem;
+    }
+
+    .tabs {
+        margin-top: 24px;
+    }
+
+    .tab-btn {
+        padding: 12px 24px;
+        font-size: 0.9rem;
+    }
+
+    .card {
+        padding: 24px 20px;
+    }
+
+    .details-table td {
+        padding: 10px 12px;
+        font-size: 0.85rem;
+    }
+}
